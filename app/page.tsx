@@ -77,7 +77,9 @@ export default function Coach() {
   const faceRef = useRef<Box | null>(null);
   const voiceRef = useRef(true);
   const spoken = useRef({ text: "", time: 0 });
-  const candidate = useRef({ text: "", since: 0 });
+  const candidate = useRef({ key: "", since: 0 });
+  // The instruction we're currently coaching on, and its score when we said it.
+  const active = useRef<{ key: string; factor?: Direction["factor"]; value: number; time: number } | null>(null);
   const lastFace = useRef<{ box: Box; time: number } | null>(null);
   const raf = useRef(0);
   // Refs mirror state so the animation loop always sees the latest values.
@@ -227,7 +229,7 @@ export default function Coach() {
     }
 
     // Spoken coaching only in Coach mode, so it doesn't talk over the light demo.
-    if (!studioRef.current) maybeSpeak(d[0], now);
+    if (!studioRef.current) maybeSpeak(d, s, now);
   }
 
   // Draw the relit frame and the light rig every animation frame.
@@ -265,20 +267,37 @@ export default function Coach() {
       drawDebugOverlay(octx, W, H, faceRef.current, lightRef.current, showModelRef.current, showModelRef.current, ema.current);
   }
 
-  // Speak the top direction only after it has been stable for a moment, and don't nag.
-  function maybeSpeak(top: Direction, now: number) {
-    if (top.text !== candidate.current.text) {
-      candidate.current = { text: top.text, since: now };
+    // Speak one instruction at a time, then tell the user if what they're doing is helping.
+  function maybeSpeak(d: Direction[], s: Scores | null, now: number) {
+    const top = d[0];
+    if (top.key !== candidate.current.key) candidate.current = { key: top.key, since: now };
+    if (!voiceRef.current || window.speechSynthesis?.speaking) return;
+
+    const a = active.current;
+    const cur = top.factor && s ? s[top.factor] : 0;
+
+    // Still working on the same problem: give progress feedback.
+    if (a && a.key === top.key) {
+      if (top.factor && now - a.time > 4000) {
+        const delta = cur - a.value;
+        if (delta > 0.12) return speakNow("Better. Keep going.", top, cur, now);
+        if (delta < -0.12) return speakNow("That made it worse. Go back the other way.", top, cur, now);
+      }
+      if (top.key !== "good" && now - a.time > 12000) speakNow(top.text, top, cur, now);
       return;
     }
-    if (!voiceRef.current || now - candidate.current.since < 1200) return;
-    const last = spoken.current;
-    const isNew = top.text !== last.text;
-    const repeatOk = top.key !== "good" && now - last.time > 9000;
-    if ((isNew || repeatOk) && now - last.time > 3000 && !window.speechSynthesis?.speaking) {
-      say(top.text);
-      spoken.current = { text: top.text, time: now };
-    }
+
+    // A new top problem: wait until it's stable so we don't react to flicker.
+    if (now - candidate.current.since < 1200) return;
+    if (a && now - a.time < 2500) return;
+    const fixed = a && a.key !== "noface" && !d.some((x) => x.key === a.key);
+    speakNow(fixed && top.key !== "good" ? `That's fixed. ${top.text}` : top.text, top, cur, now);
+  }
+
+  function speakNow(text: string, top: Direction, value: number, now: number) {
+    say(text);
+    active.current = { key: top.key, factor: top.factor, value, time: now };
+    spoken.current = { text, time: now };
   }
 
   function drawOverlay(face: Box | null) {

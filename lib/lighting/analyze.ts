@@ -15,6 +15,9 @@ export type Metrics = {
   cx: number; // face center x
   cy: number; // face center y
   size: number; // face height as a share of frame height
+  spotCol: number; // brightest background area: 0 = raw image-left (your RIGHT), 1 = behind your head, 2 = your LEFT
+  spotRow: number; // 0 = high up (ceiling light, top of a window), 1 = around shoulder height
+  spotLift: number; // how much brighter that spot is than the background overall (1 = no single bright spot)
 };
 
 export type Scores = {
@@ -26,7 +29,8 @@ export type Scores = {
   total: number;
 };
 
-export type Direction = { key: string; text: string };
+// factor = which score this instruction is trying to fix, so we can tell the user if it's getting better.
+export type Direction = { key: string; text: string; factor?: keyof Omit<Scores, "total"> };
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const lum = (r: number, g: number, b: number) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -83,6 +87,9 @@ export function measure(px: Uint8ClampedArray, W: number, H: number, face: Box):
   let bgN = 0;
   let allSum = 0;
   const bgRows = Math.floor(H * 0.65);
+  // Split the background into a 3x2 grid to find WHERE the bright spot is.
+  const cellSum = new Float64Array(6);
+  const cellN = new Uint32Array(6);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
@@ -91,10 +98,23 @@ export function measure(px: Uint8ClampedArray, W: number, H: number, face: Box):
       if (y < bgRows && (Math.abs(x - cxp) > halfW || Math.abs(y - cyp) > halfH)) {
         bgSum += v;
         bgN++;
+        const c = Math.min(2, Math.floor((x / W) * 3)) + (y < bgRows / 2 ? 0 : 3);
+        cellSum[c] += v;
+        cellN[c]++;
       }
     }
   }
   const bgMean = bgN > W * H * 0.05 ? bgSum / bgN : allSum / (W * H);
+  let best = 0;
+  let bestMean = -1;
+  for (let c = 0; c < 6; c++) {
+    if (cellN[c] < 20) continue;
+    const mean = cellSum[c] / cellN[c];
+    if (mean > bestMean) {
+      bestMean = mean;
+      best = c;
+    }
+  }
 
   return {
     faceP90,
@@ -105,6 +125,9 @@ export function measure(px: Uint8ClampedArray, W: number, H: number, face: Box):
     cx: face.x + face.w / 2,
     cy: face.y + face.h / 2,
     size: face.h,
+    spotCol: best % 3,
+    spotRow: best < 3 ? 0 : 1,
+    spotLift: bestMean > 0 ? bestMean / Math.max(bgMean, 1) : 1,
   };
 }
 
@@ -133,39 +156,72 @@ export function score(m: Metrics, trackFace: boolean): Scores {
 }
 
 // Most important fix first. The first item is what gets spoken.
+// Every instruction says WHERE the problem is (from the camera image) and ONE thing to do.
 export function directions(m: Metrics, s: Scores, faceFound: boolean, trackFace: boolean): Direction[] {
-  if (!faceFound) return [{ key: "noface", text: "I can't find your face. Sit in front of the camera." }];
+  if (!faceFound) return [{ key: "noface", text: "I can't see your face. Sit in the middle of the camera view." }];
 
   const out: Direction[] = [];
-  // Backlight first: when a window is behind you, your face is dark *because* of it.
-  if (s.backlight < 0.7)
-    out.push({ key: "backlit", text: "There's bright light behind you. Turn your laptop so the window is in front of you, or close the blinds behind you." });
+  // Positive = the raw image-right half of your face is brighter = light from YOUR left.
+  const asym = (m.rightMean - m.leftMean) / Math.max(m.leftMean, m.rightMean, 1);
+  const lightSide = Math.abs(asym) > 0.08 ? (asym > 0 ? "left" : "right") : null;
+
+  // Backlight first: when something bright is behind you, your face looks dark *because* of it.
+  if (s.backlight < 0.7) {
+    const col = Math.round(m.spotCol);
+    const row = Math.round(m.spotRow);
+    let text: string;
+    if (m.spotLift < 1.15)
+      // No single bright spot: the whole background is bright (a big window, a white wall in sun).
+      text = "Everything behind you is much brighter than your face. Turn your chair and laptop so the brightest window or lamp is in front of you instead of behind you.";
+    else if (col === 1 && row === 0)
+      text = "There's a bright light above and behind your head. Tilt your laptop screen toward you a little until it's out of the picture, or switch that light off.";
+    else if (col === 1)
+      text = "There's a bright light right behind your head. If it's a window, cover it. If it's a lamp, switch it off. Or turn your chair and laptop around to face it.";
+    else {
+      const sh = col === 0 ? "right" : "left"; // mirrored view: your right shoulder shows on the right of the screen
+      text = `There's a bright light behind you, over your ${sh} shoulder. It's the bright area on the ${sh} side of your video. If it's a window, cover it. If it's a lamp, switch it off or move it.`;
+    }
+    out.push({ key: "backlit", factor: "backlight", text });
+  }
   if (s.brightness < 0.7)
-    out.push({ key: "dark", text: "It's too dark on your face. Turn toward a window, or put a lamp behind your screen pointing at you." });
+    out.push({
+      key: "dark",
+      factor: "brightness",
+      text: lightSide
+        ? `Your face is too dark. Most of your light is coming from your ${lightSide}, so turn your chair toward your ${lightSide}.`
+        : "Your face is too dark. Turn your screen brightness all the way up, and turn on a light in front of you.",
+    });
   if (s.notBlown < 0.7)
-    out.push({ key: "blown", text: "Your face is too bright. Move back from the light, or point the lamp at a wall instead." });
+    out.push({
+      key: "blown",
+      factor: "notBlown",
+      text: lightSide
+        ? `The light on your ${lightSide} is too strong. Lean away from it a little, or dim it.`
+        : "Your face is too bright. Lean back from the light, or turn your screen brightness down.",
+    });
   if (s.evenness < 0.7) {
-    // Raw image-right is the user's left side.
-    out.push(
-      m.rightMean > m.leftMean
-        ? { key: "uneven-left", text: "The light is coming from your left. Turn slightly to your left, toward the light." }
-        : { key: "uneven-right", text: "The light is coming from your right. Turn slightly to your right, toward the light." }
-    );
+    const side = asym > 0 ? "left" : "right";
+    out.push({
+      key: `uneven-${side}`,
+      factor: "evenness",
+      text: `The ${side} side of your face is brighter. Turn your chair a little to your ${side}, toward the light, until both cheeks look the same.`,
+    });
   }
   if (trackFace) {
-    if (m.size < 0.25) out.push({ key: "closer", text: "Move a little closer to the screen." });
-    if (m.size > 0.5) out.push({ key: "back", text: "Lean back a little." });
+    if (m.size < 0.25) out.push({ key: "closer", factor: "framing", text: "You're far from the camera. Move a little closer to the screen." });
+    if (m.size > 0.5) out.push({ key: "back", factor: "framing", text: "You're very close to the camera. Lean back a little." });
     // Face on raw image-left means you're shifted to your own right.
-    if (m.cx < 0.38) out.push({ key: "go-left", text: "Move a little to your left." });
-    if (m.cx > 0.62) out.push({ key: "go-right", text: "Move a little to your right." });
-    if (m.cy > 0.55) out.push({ key: "tilt-down", text: "Tilt your screen down a little." });
-    if (m.cy < 0.28) out.push({ key: "tilt-back", text: "Tilt your screen back a little." });
+    if (m.cx < 0.38) out.push({ key: "go-left", factor: "framing", text: "You're off to the side. Move a little to your left." });
+    if (m.cx > 0.62) out.push({ key: "go-right", factor: "framing", text: "You're off to the side. Move a little to your right." });
+    // A laptop camera sits on top of the screen: closing the lid a bit points it down.
+    if (m.cy > 0.55) out.push({ key: "tilt-down", factor: "framing", text: "Your face is low in the picture. Tilt your laptop screen toward you a little." });
+    if (m.cy < 0.28) out.push({ key: "tilt-back", factor: "framing", text: "Your face is high in the picture. Tilt your laptop screen back a little." });
   }
   if (!out.length) {
     out.push(
       s.total >= 80
         ? { key: "good", text: "Great lighting. You're ready." }
-        : { key: "almost", text: "Almost there. Try facing the light a little more." }
+        : { key: "almost", text: "Almost there. Turn a little more toward your brightest light." }
     );
   }
   return out;
