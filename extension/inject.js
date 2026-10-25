@@ -231,6 +231,22 @@
     const out = canvas.captureStream(30);
     src.getAudioTracks().forEach((t) => out.addTrack(t));
     const outTrack = out.getVideoTracks()[0];
+        // Call apps (Meet, Teams) check the camera's name, settings, and controls.
+    // A processed video has none of these, so they'd think the camera is broken.
+    // Make our track report the real camera's details and pass controls through to it.
+    const passthrough = {
+      label: () => camTrack.label,
+      getSettings: () => () => ({ ...camTrack.getSettings(), width: canvas.width, height: canvas.height }),
+      getCapabilities: () => () => (camTrack.getCapabilities ? camTrack.getCapabilities() : {}),
+      getConstraints: () => () => camTrack.getConstraints(),
+      applyConstraints: () => (c) => camTrack.applyConstraints(c).catch(() => {}),
+    };
+    for (const [name, make] of Object.entries(passthrough)) {
+      try {
+        if (name === "label") Object.defineProperty(outTrack, "label", { get: make, configurable: true });
+        else Object.defineProperty(outTrack, name, { value: make(), configurable: true });
+      } catch {}
+    }
     // When the call app turns the camera off, turn the real camera off too.
     const stopOut = outTrack.stop.bind(outTrack);
     outTrack.stop = () => {
