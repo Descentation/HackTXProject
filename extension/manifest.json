@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Light Coach",
+  "version": "0.1.0",
+  "description": "Better lighting on any video call. When a site asks for your camera, Light Coach can add a virtual light and coach you live.",
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    }
+  ]
+}
