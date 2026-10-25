@@ -74,9 +74,12 @@ export function findBestAim(
     }
   };
 
-  if (full) {
-    for (const s of SPOTS)
-      for (const intensity of INTENSITIES) for (const distance of DISTANCES) for (const softness of SOFTNESS) consider({ ...s, intensity, distance, softness });
+    if (full) {
+    // First look: every spot and strength (~120 tries), then distance and softness.
+    // Kept small so the video doesn't stutter; the quick search below refines it every frame after.
+    for (const s of SPOTS) for (const intensity of INTENSITIES) consider({ ...best, ...s, intensity });
+    for (const distance of DISTANCES) consider({ ...best, distance });
+    for (const softness of SOFTNESS) consider({ ...best, softness });
   } else {
     for (const s of SPOTS) consider({ ...best, ...s });
     for (const intensity of INTENSITIES) consider({ ...best, intensity });

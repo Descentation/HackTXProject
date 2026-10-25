@@ -45,8 +45,27 @@ const LABELS: [keyof Scores, string][] = [
   ["backlight", "No glare behind you"],
   ["evenness", "Even light on both sides"],
   ["notBlown", "Not washed out"],
-  ["framing", "Framing"],
+    ["framing", "Framing"],
 ];
+
+// Short headline for each instruction. Shown big; the full sentence is shown below it and spoken.
+const HEADLINES: Record<string, string> = {
+  noface: "Can't see your face",
+  backlit: "Bright light behind you",
+  dark: "Your face is too dark",
+  blown: "Your face is too bright",
+  "uneven-left": "Brighter on your left side",
+  "uneven-right": "Brighter on your right side",
+  closer: "Move a little closer",
+  back: "Lean back a little",
+  "go-left": "Move a little left",
+  "go-right": "Move a little right",
+  "tilt-down": "Tilt your screen toward you",
+  "tilt-back": "Tilt your screen back",
+  good: "You look great",
+  almost: "Almost there",
+};
+
 
 type Settings = {
   autoLight: boolean; // the app picks the light position/strength for the best score
@@ -345,7 +364,12 @@ export default function Coach() {
   function maybeSpeak(d: Direction[], s: Scores | null, now: number) {
     const top = d[0];
     if (top.key !== candidate.current.key) candidate.current = { key: top.key, since: now };
-    if (!voiceRef.current || window.speechSynthesis?.speaking) return;
+        if (!voiceRef.current) return;
+    // Chrome sometimes reports "still speaking" forever, which would silence the coach. Reset it.
+    if (window.speechSynthesis?.speaking) {
+      if (now - spoken.current.time > 10000) window.speechSynthesis.cancel();
+      return;
+    }
 
     const a = active.current;
     const cur = top.factor && s ? s[top.factor] : 0;
@@ -409,7 +433,7 @@ export default function Coach() {
           Settings
         </button>
         <button className={`aero-tab ${tab === "why" ? "active" : ""}`} onClick={() => setTab("why")}>
-          Why it matters
+          The Big Why??
         </button>
       </nav>
 
@@ -465,6 +489,26 @@ export default function Coach() {
                 {!settings.lightOn ? "Virtual light off" : auto ? "✨ Auto light: tuning for your best look" : "Manual light: drag to move it"}
               </div>
             )}
+                        {running && mode === "loading" && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  textAlign: "center",
+                  color: "#fff",
+                  borderRadius: 18,
+                  background: "rgba(10, 60, 100, 0.35)",
+                  pointerEvents: "none",
+                }}
+              >
+                <div>
+                  <div className="aero-spinner" style={{ margin: "0 auto 10px" }} />
+                  <div style={{ textShadow: "0 1px 3px rgba(0,40,80,0.6)" }}>Finding your face…</div>
+                </div>
+              </div>
+            )}
             {!running && (
               <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", textAlign: "center", color: "#fff" }}>
                 <div>
@@ -484,22 +528,39 @@ export default function Coach() {
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
                 <ScoreRing value={virtualTotal} />
-                <div>
-                  <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{settings.lightOn ? "With virtual light" : "Lighting score"}</div>
+                                <div>
+                  <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 6 }}>
+                    {settings.lightOn ? "Your best possible look" : "Your lighting score"}
+                  </div>
                   {settings.lightOn && (
-                    <div style={{ marginTop: 6, fontSize: 15 }}>
-                      Camera alone{" "}
-                      <strong id="real-score" data-score={real ?? ""} style={{ color: scoreColor(real), fontSize: 20 }}>
-                        {real ?? "--"}
-                      </strong>
+                    // Before -> after, so it's obvious what the virtual light adds.
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--ink-soft)" }}>
+                      <div style={{ textAlign: "center" }}>
+                        <strong id="real-score" data-score={real ?? ""} style={{ display: "block", color: scoreColor(real), fontSize: 24 }}>
+                          {real ?? "--"}
+                        </strong>
+                        your camera
+                      </div>
+                      <span style={{ fontSize: 20, color: "var(--aqua)" }}>→</span>
+                      <div style={{ textAlign: "center" }}>
+                        <strong style={{ display: "block", color: scoreColor(virtualTotal), fontSize: 24 }}>{virtualTotal ?? "--"}</strong>
+                        with light
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
 
-              <p id="instruction" style={{ fontSize: 19, fontWeight: 600, lineHeight: 1.4, minHeight: 56, margin: "18px 0 10px" }}>
-                {running ? dirs[0]?.text ?? "Looking for you..." : "Press Start camera to begin."}
-              </p>
+                            <div style={{ margin: "18px 0 10px", minHeight: 70 }}>
+                <div style={{ fontSize: 21, fontWeight: 700 }}>
+                  {running ? (dirs[0] ? HEADLINES[dirs[0].key] ?? "Next step" : "Looking for you…") : "Press Start camera to begin"}
+                </div>
+                {running && dirs[0] && (
+                  <p id="instruction" style={{ fontSize: 15, lineHeight: 1.5, margin: "4px 0 0", color: "var(--ink-soft)" }}>
+                    {dirs[0].text}
+                  </p>
+                )}
+              </div>
 
               {dirs.length > 1 && (
                 <ul style={{ marginTop: 0, paddingLeft: 18, color: "var(--ink-soft)", fontSize: 14 }}>
@@ -512,7 +573,8 @@ export default function Coach() {
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--ink-soft)", margin: "14px 0 8px" }}>
                 Your real setup
               </div>
-              {LABELS.map(([k, label]) => {
+                            {/* Framing can't be measured without face tracking, so hide it instead of showing a fake 100%. */}
+              {LABELS.filter(([k]) => k !== "framing" || mode !== "center").map(([k, label]) => {
                 const v = scores?.[k] ?? 0;
                 return (
                   <div key={k} style={{ marginBottom: 10 }}>
@@ -654,8 +716,10 @@ export default function Coach() {
         </div>
       </div>
 
-      <p style={{ fontSize: 12, color: "var(--ink)", opacity: 0.75, marginTop: 20, textAlign: "center" }}>
-        Video stays on your computer and is never uploaded. The virtual light is a 2D preview using a simple head model, not a physically accurate
+      <p
+        className="glass"
+        style={{ fontSize: 12, color: "var(--ink)", marginTop: 20, textAlign: "center", padding: "10px 16px", borderRadius: 16 }}
+      >        Video stays on your computer and is never uploaded. The virtual light is a 2D preview using a simple head model, not a physically accurate
         relight. The voice directions are about your real lighting.
       </p>
     </main>
