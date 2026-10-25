@@ -68,7 +68,10 @@ const DEFAULT_SETTINGS: Settings = {
   manualSoftness: DEFAULT_LIGHT.softness,
 };
 
-const scoreColor = (t: number | null) => (t === null ? "#999" : t >= 80 ? "#2e7d32" : t >= 50 ? "#c77700" : "#c62828");
+// Soft Aero colors: leaf green, sunny amber, coral.
+const scoreColor = (t: number | null) => (t === null ? "#8fb3c9" : t >= 80 ? "#3cb043" : t >= 50 ? "#f2a71b" : "#ef5b5b");
+const fillGradient = (v: number) =>
+  v >= 0.7 ? "linear-gradient(180deg, #9be870, #3cb043)" : v >= 0.4 ? "linear-gradient(180deg, #ffd66b, #f2a71b)" : "linear-gradient(180deg, #ff9a8a, #ef5b5b)";
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export default function Coach() {
@@ -383,125 +386,159 @@ export default function Coach() {
     aimRef.current = lightToAim({ ...lightRef.current, x, y, intensity: st.manualIntensity, distance: st.manualDistance, softness: st.manualSoftness }, face);
   }
 
-  const real = scores?.total ?? null;
+    const real = scores?.total ?? null;
   const auto = settings.autoLight;
 
   return (
-    <main style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ marginBottom: 4 }}>Light Coach</h1>
-      <p style={{ marginTop: 0, opacity: 0.8 }}>
-        A live lighting check before your video interview. A virtual light sets itself for the best possible score, and the voice tells you how to
-        improve your real lighting even more.
-      </p>
+    <main style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 20px 48px" }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 6 }}>
+        <Orb size={54} />
+        <div>
+          <h1 className="aero-title">Light Coach</h1>
+          <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: 16 }}>
+            Your virtual light finds your best look. Your coach helps you get it for real.
+          </p>
+        </div>
+      </header>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button style={tab === "coach" ? tabOn : tabOff} onClick={() => setTab("coach")}>
+      <nav className="aero-tabs" style={{ margin: "14px 0 20px" }}>
+        <button className={`aero-tab ${tab === "coach" ? "active" : ""}`} onClick={() => setTab("coach")}>
           Coach
         </button>
-        <button style={tab === "settings" ? tabOn : tabOff} onClick={() => setTab("settings")}>
+        <button className={`aero-tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>
           Settings
         </button>
-        <button style={tab === "why" ? tabOn : tabOff} onClick={() => setTab("why")}>
+        <button className={`aero-tab ${tab === "why" ? "active" : ""}`} onClick={() => setTab("why")}>
           Why it matters
         </button>
-      </div>
+      </nav>
 
       {tab === "why" && <WhyTab />}
 
       {/* Hidden (not removed) on the Why tab, so the camera keeps running. */}
-      <div style={{ display: tab === "why" ? "none" : "flex", gap: 24, flexWrap: "wrap" }}>
-        <div style={{ position: "relative", flex: "1 1 480px", maxWidth: 640, alignSelf: "flex-start" }}>
-          {/* The raw camera sits underneath; the relit view is drawn on top. Mirrored like a selfie camera. */}
-          <video ref={videoRef} playsInline muted style={{ width: "100%", borderRadius: 12, background: "#222", transform: "scaleX(-1)", display: "block" }} />
-          <canvas ref={relitRef} style={{ ...layer, borderRadius: 12, pointerEvents: "none", visibility: running ? "visible" : "hidden" }} />
-          <canvas
-            ref={overlayRef}
-            style={{ ...layer, cursor: "crosshair", touchAction: "none", pointerEvents: running ? "auto" : "none" }}
-            onPointerDown={(e) => {
-              dragging.current = true;
-              e.currentTarget.setPointerCapture(e.pointerId);
-              moveLight(e);
-            }}
-            onPointerMove={(e) => dragging.current && moveLight(e)}
-            onPointerUp={() => (dragging.current = false)}
-            onPointerCancel={() => (dragging.current = false)}
-          />
-          {running && (
-            <div style={{ position: "absolute", left: 10, bottom: 10, background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 12, padding: "4px 8px", borderRadius: 6, pointerEvents: "none" }}>
-              {!settings.lightOn ? "Virtual light off" : auto ? "Auto light: tuning for the best score" : "Manual light: drag to move it"}
-            </div>
-          )}
-          {!running && (
-            <button onClick={start} style={{ ...button, position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontSize: 18 }}>
-              Start camera
-            </button>
-          )}
+      <div style={{ display: tab === "why" ? "none" : "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div className="aero-frame" style={{ flex: "1 1 480px", maxWidth: 660 }}>
+          <div style={{ position: "relative" }}>
+            {/* The raw camera sits underneath; the relit view is drawn on top. Mirrored like a selfie camera. */}
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              style={{
+                width: "100%",
+                aspectRatio: running ? undefined : "4 / 3", // keep the camera's real shape once it's on, so overlays line up
+                borderRadius: 18,
+                background: "radial-gradient(circle at 50% 35%, #2c86c4, #0b3a5c)",
+                transform: "scaleX(-1)",
+                display: "block",
+              }}
+            />
+            <canvas ref={relitRef} style={{ ...layer, borderRadius: 18, pointerEvents: "none", visibility: running ? "visible" : "hidden" }} />
+            <canvas
+              ref={overlayRef}
+              style={{ ...layer, cursor: "crosshair", touchAction: "none", pointerEvents: running ? "auto" : "none" }}
+              onPointerDown={(e) => {
+                dragging.current = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                moveLight(e);
+              }}
+              onPointerMove={(e) => dragging.current && moveLight(e)}
+              onPointerUp={() => (dragging.current = false)}
+              onPointerCancel={() => (dragging.current = false)}
+            />
+            {running && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 12,
+                  bottom: 12,
+                  color: "#fff",
+                  fontSize: 12,
+                  padding: "5px 12px",
+                  borderRadius: 999,
+                  pointerEvents: "none",
+                  background: "rgba(10, 60, 100, 0.45)",
+                  border: "1px solid rgba(255,255,255,0.4)",
+                  backdropFilter: "blur(6px)",
+                }}
+              >
+                {!settings.lightOn ? "Virtual light off" : auto ? "✨ Auto light: tuning for your best look" : "Manual light: drag to move it"}
+              </div>
+            )}
+            {!running && (
+              <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", textAlign: "center", color: "#fff" }}>
+                <div>
+                  <Orb size={86} />
+                  <div style={{ margin: "10px 0 16px", fontSize: 17, textShadow: "0 1px 3px rgba(0,40,80,0.6)" }}>Ready when you are</div>
+                  <button className="aero-btn big" onClick={start}>
+                    Start camera
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div style={{ flex: "1 1 280px", ...card }}>
+        <div className="glass" style={{ flex: "1 1 300px", padding: 22 }}>
           {tab === "coach" ? (
             <>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span id="score" data-score={virtualTotal ?? ""} style={{ fontSize: 64, fontWeight: 700, color: scoreColor(virtualTotal) }}>
-                  {virtualTotal ?? "--"}
-                </span>
-                <span style={{ opacity: 0.7 }}>/ 100 {settings.lightOn ? "with virtual light" : "lighting score"}</span>
-              </div>
-              {settings.lightOn && (
-                <div style={{ marginTop: -6, fontSize: 15 }}>
-                  Camera alone:{" "}
-                  <strong id="real-score" data-score={real ?? ""} style={{ color: scoreColor(real) }}>
-                    {real ?? "--"}
-                  </strong>
+              <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+                <ScoreRing value={virtualTotal} />
+                <div>
+                  <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{settings.lightOn ? "With virtual light" : "Lighting score"}</div>
+                  {settings.lightOn && (
+                    <div style={{ marginTop: 6, fontSize: 15 }}>
+                      Camera alone{" "}
+                      <strong id="real-score" data-score={real ?? ""} style={{ color: scoreColor(real), fontSize: 20 }}>
+                        {real ?? "--"}
+                      </strong>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
-              <p id="instruction" style={{ fontSize: 20, fontWeight: 600, minHeight: 56 }}>
-                {running ? dirs[0]?.text ?? "Looking..." : "Press Start camera."}
+              <p id="instruction" style={{ fontSize: 19, fontWeight: 600, lineHeight: 1.4, minHeight: 56, margin: "18px 0 10px" }}>
+                {running ? dirs[0]?.text ?? "Looking for you..." : "Press Start camera to begin."}
               </p>
 
               {dirs.length > 1 && (
-                <ul style={{ marginTop: 0, paddingLeft: 18, opacity: 0.8 }}>
+                <ul style={{ marginTop: 0, paddingLeft: 18, color: "var(--ink-soft)", fontSize: 14 }}>
                   {dirs.slice(1).map((d) => (
                     <li key={d.key}>{d.text}</li>
                   ))}
                 </ul>
               )}
 
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Your real setup</div>
-              {LABELS.map(([k, label]) => (
-                <div key={k} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 13 }}>{label}</div>
-                  <div style={{ background: "#eee3c8", borderRadius: 6, height: 10 }}>
-                    <div
-                      style={{
-                        width: `${Math.round((scores?.[k] ?? 0) * 100)}%`,
-                        height: "100%",
-                        borderRadius: 6,
-                        background: (scores?.[k] ?? 0) >= 0.7 ? "#2e7d32" : "#c77700",
-                        transition: "width 0.2s",
-                      }}
-                    />
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--ink-soft)", margin: "14px 0 8px" }}>
+                Your real setup
+              </div>
+              {LABELS.map(([k, label]) => {
+                const v = scores?.[k] ?? 0;
+                return (
+                  <div key={k} style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                      <span>{label}</span>
+                      <span style={{ color: "var(--ink-soft)" }}>{Math.round(v * 100)}%</span>
+                    </div>
+                    <div className="aero-track">
+                      <div className="aero-fill" style={{ width: `${Math.round(v * 100)}%`, background: fillGradient(v) }} />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </>
           ) : (
             <>
-              <h3 style={{ marginTop: 0 }}>Settings</h3>
+              <h3 style={{ marginTop: 0, fontSize: 20 }}>Settings</h3>
 
               <Toggle label="Virtual light" on={settings.lightOn} onChange={(v) => updateSettings({ lightOn: v })} />
               <Toggle label="Auto light (best score)" on={auto} onChange={(v) => updateSettings({ autoLight: v })} />
               <Toggle label="Show how it works (head model, light ray)" on={settings.showModel} onChange={(v) => updateSettings({ showModel: v })} />
               <Toggle label="Voice directions" on={voiceOn} onChange={setVoiceOn} />
 
-              <label style={{ display: "block", fontSize: 13, marginBottom: 8 }}>
+              <label style={{ display: "block", fontSize: 13, margin: "12px 0 8px" }}>
                 Voice
-                <select
-                  value={voiceName}
-                  onChange={(e) => setVoiceName(e.target.value)}
-                  style={{ display: "block", width: "100%", marginTop: 4, padding: 6, borderRadius: 6, border: "1px solid #c9b88f" }}
-                >
+                <select value={voiceName} onChange={(e) => setVoiceName(e.target.value)} style={{ display: "block", width: "100%", marginTop: 4 }}>
                   <option value="">Auto (most natural: {pickVoice("")?.name ?? "default"})</option>
                   {voices.map((v) => (
                     <option key={v.name} value={v.name}>
@@ -512,17 +549,18 @@ export default function Coach() {
               </label>
               <Slider label="Voice speed" value={voiceRate} min={0.7} max={1.4} step={0.05} onChange={setVoiceRate} />
               <button
-                style={{ ...button, background: "#7a6a4f", marginBottom: 12 }}
+                className="aero-btn silver"
+                style={{ marginBottom: 14 }}
                 onClick={() => {
                   voiceNameRef.current = voiceName;
                   voiceRateRef.current = voiceRate;
                   say("Hi! This is how I'll sound while I help with your lighting.");
                 }}
               >
-                Test voice
+                🔊 Test voice
               </button>
 
-              <p style={{ fontSize: 12, opacity: 0.7, margin: "4px 0 8px" }}>
+              <p style={{ fontSize: 12, color: "var(--ink-soft)", margin: "4px 0 8px" }}>
                 {auto
                   ? "Auto light is choosing the position, intensity, distance, and softness. Turn it off or drag the light to adjust them yourself."
                   : "Manual: drag the light on the video, and use the sliders."}
@@ -556,20 +594,24 @@ export default function Coach() {
                 onChange={(v) => updateSettings({ manualSoftness: v })}
               />
 
-              <div style={{ fontSize: 13, margin: "4px 0" }}>Light color</div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, margin: "6px 0" }}>Light color</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                 {COLORS.map((c) => (
                   <button
                     key={c.name}
                     onClick={() => updateSettings({ colorName: c.name })}
+                    title={c.name}
                     style={{
                       flex: 1,
-                      padding: "6px 0",
-                      borderRadius: 8,
+                      padding: "8px 0",
+                      borderRadius: 999,
                       cursor: "pointer",
-                      background: c.css,
-                      border: settings.colorName === c.name ? "2px solid #3b2f1d" : "1px solid #e4d9bd",
+                      font: "inherit",
                       fontSize: 12,
+                      color: "var(--ink)",
+                      background: `radial-gradient(circle at 35% 25%, #fff 0%, ${c.css} 45%, ${c.css} 100%)`,
+                      border: settings.colorName === c.name ? "2px solid var(--aqua)" : "1px solid rgba(80,140,180,0.35)",
+                      boxShadow: settings.colorName === c.name ? "0 0 0 3px rgba(30,155,224,0.2)" : "none",
                     }}
                   >
                     {c.name}
@@ -578,7 +620,7 @@ export default function Coach() {
               </div>
 
               <button
-                style={{ ...button, background: "#7a6a4f" }}
+                className="aero-btn silver"
                 onClick={() => {
                   aimRef.current = DEFAULT_AIM;
                   updateSettings({ ...DEFAULT_SETTINGS });
@@ -592,32 +634,97 @@ export default function Coach() {
             </>
           )}
 
-          <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-            <button style={button} onClick={() => setVoiceOn((v) => !v)}>
-              {voiceOn ? "Voice: on" : "Voice: off"}
+          <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+            <button className={`aero-btn ${voiceOn ? "" : "silver"}`} onClick={() => setVoiceOn((v) => !v)}>
+              {voiceOn ? "🔊 Voice on" : "🔇 Voice off"}
             </button>
             {running && (
-              <button style={{ ...button, background: "#7a6a4f" }} onClick={stop}>
+              <button className="aero-btn silver" onClick={stop}>
                 Stop
               </button>
             )}
           </div>
 
-          <p style={{ fontSize: 12, opacity: 0.7 }}>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 0 }}>
             {mode === "loading" && "Loading face tracking..."}
-            {mode === "face" && "Face tracking on."}
+            {mode === "face" && "● Face tracking on"}
             {mode === "center" && "Face tracking unavailable, so I'm checking the center of the frame. Framing tips are off."}
           </p>
-          {error && <p style={{ color: "#c62828" }}>{error}</p>}
+          {error && <p style={{ color: "#d64545" }}>{error}</p>}
         </div>
       </div>
 
-      <p style={{ fontSize: 12, opacity: 0.7, marginTop: 16 }}>
-        Video stays on your computer and is never uploaded. The score measures relative light in the camera image, so treat it as a guide. The
-        virtual light is a 2D preview using a simple head model, not a physically accurate relight. The voice directions are about your real
-        lighting.
+      <p style={{ fontSize: 12, color: "var(--ink)", opacity: 0.75, marginTop: 20, textAlign: "center" }}>
+        Video stays on your computer and is never uploaded. The virtual light is a 2D preview using a simple head model, not a physically accurate
+        relight. The voice directions are about your real lighting.
       </p>
     </main>
+  );
+}
+
+// Glossy sphere logo, Frutiger Aero style.
+function Orb({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: "drop-shadow(0 6px 10px rgba(0,80,140,0.35))", flexShrink: 0 }}>
+      <defs>
+        <radialGradient id="orbBody" cx="50%" cy="60%" r="60%">
+          <stop offset="0" stopColor="#bff0ff" />
+          <stop offset="0.55" stopColor="#36aef0" />
+          <stop offset="1" stopColor="#0a6fb3" />
+        </radialGradient>
+        <radialGradient id="orbSun" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor="#fffbe0" />
+          <stop offset="0.6" stopColor="#ffd84d" />
+          <stop offset="1" stopColor="#ffb300" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="orbShine" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.95" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <circle cx="50" cy="50" r="46" fill="url(#orbBody)" stroke="rgba(255,255,255,0.8)" strokeWidth="2" />
+      <circle cx="62" cy="60" r="20" fill="url(#orbSun)" />
+      <ellipse cx="50" cy="28" rx="32" ry="18" fill="url(#orbShine)" />
+    </svg>
+  );
+}
+
+// Round glossy score gauge.
+function ScoreRing({ value }: { value: number | null }) {
+  const pct = value ?? 0;
+  const color = scoreColor(value);
+  return (
+    <div
+      style={{
+        width: 128,
+        height: 128,
+        borderRadius: "50%",
+        padding: 9,
+        flexShrink: 0,
+        background: `conic-gradient(${color} ${pct * 3.6}deg, rgba(255,255,255,0.55) 0deg)`,
+        boxShadow: "0 8px 22px rgba(0,80,140,0.22), inset 0 0 0 1px rgba(255,255,255,0.9)",
+        transition: "background 0.3s",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          borderRadius: "50%",
+          display: "grid",
+          placeItems: "center",
+          background: "radial-gradient(circle at 35% 25%, #ffffff 0%, #eaf8ff 45%, #cfeefc 100%)",
+          boxShadow: "inset 0 -6px 14px rgba(0,100,170,0.15)",
+        }}
+      >
+        <div style={{ textAlign: "center", lineHeight: 1 }}>
+          <span id="score" data-score={value ?? ""} style={{ fontSize: 42, fontWeight: 700, color }}>
+            {value ?? "--"}
+          </span>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>/ 100</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -639,7 +746,7 @@ function Slider({
   onChange: (v: number) => void;
 }) {
   return (
-    <label style={{ display: "block", marginBottom: 8, fontSize: 13, opacity: disabled ? 0.6 : 1 }}>
+    <label style={{ display: "block", marginBottom: 10, fontSize: 13, opacity: disabled ? 0.55 : 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <span>
           {label}
@@ -647,29 +754,18 @@ function Slider({
         </span>
         <span style={{ opacity: 0.6 }}>{value.toFixed(2)}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(+e.target.value)} style={{ width: "100%", accentColor: "#3b2f1d" }} />
+      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(+e.target.value)} style={{ width: "100%" }} />
     </label>
   );
 }
 
 function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, marginBottom: 8, cursor: "pointer" }}>
+    <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.7)", cursor: "pointer" }}>
       <span>{label}</span>
-      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} style={{ width: 18, height: 18, accentColor: "#3b2f1d" }} />
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} style={{ width: 18, height: 18 }} />
     </label>
   );
 }
 
 const layer: React.CSSProperties = { position: "absolute", inset: 0, width: "100%", height: "100%", transform: "scaleX(-1)" };
-const card: React.CSSProperties = { background: "#fff", border: "1px solid #e4d9bd", borderRadius: 12, padding: 16 };
-const button: React.CSSProperties = {
-  background: "#3b2f1d",
-  color: "#fff",
-  padding: "10px 16px",
-  borderRadius: 8,
-  border: "none",
-  cursor: "pointer",
-};
-const tabOn: React.CSSProperties = { ...button, padding: "8px 16px" };
-const tabOff: React.CSSProperties = { ...button, padding: "8px 16px", background: "transparent", color: "#3b2f1d", border: "1px solid #c9b88f" };

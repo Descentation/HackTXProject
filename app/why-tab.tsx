@@ -1,81 +1,113 @@
 import { FAIRNESS, RESEARCH, type Study } from "../lib/lighting/research";
 
-const FACTORS: [string, string][] = [
-  ["Face brightness (30%)", "Is there enough light on your face? Measured from the brightest parts of your face, so it's fair across skin tones."],
-  ["No glare behind you (25%)", "Is the area behind you brighter than you? A window or lamp behind you makes your camera darken your face."],
-  ["Even light on both sides (20%)", "Is one cheek much darker than the other? Side light that leaves half your face in shadow reads as less trustworthy."],
-  ["Not washed out (10%)", "Is part of your face pure white? Too much light in your face loses detail."],
-  ["Framing (15%)", "Is your face centered and a good size in the picture?"],
+const FACTORS: [string, string, string][] = [
+  ["☀️", "Face brightness · 30%", "Enough light on your face, measured from the brightest parts so it's fair across skin tones."],
+  ["🪟", "No glare behind you · 25%", "Nothing brighter behind you than you. A window behind you makes your camera darken your face."],
+  ["⚖️", "Even light · 20%", "Both cheeks lit about the same. Half a face in shadow reads as less trustworthy."],
+  ["💡", "Not washed out · 10%", "No pure-white patches. Too much light in your face loses detail."],
+  ["🖼️", "Framing · 15%", "Your face centered and a good size in the picture."],
 ];
 
 export default function WhyTab() {
   return (
-    <div>
-      <h2 style={{ marginTop: 0, marginBottom: 4 }}>Why lighting matters</h2>
-      <p style={{ marginTop: 0, fontSize: 16, lineHeight: 1.5, maxWidth: 820 }}>
-        In a remote interview, your video is your first impression. Interviewers form a view of you within seconds, and they see you through a
-        webcam that usually wasn&apos;t built for good lighting. Research shows that how you&apos;re lit, where your camera sits, and how your
-        video looks all change how trustworthy and likable people think you are, even when what you say is exactly the same. Light Coach fixes
-        the part you control.
-      </p>
+    <div style={{ display: "grid", gap: 22 }}>
+      <section className="glass" style={{ padding: "26px 28px" }}>
+        <h2 style={{ margin: "0 0 8px", fontSize: 28, fontWeight: 600 }}>Why lighting matters</h2>
+        <p style={{ margin: 0, fontSize: 17, lineHeight: 1.6, maxWidth: 780, color: "var(--ink)" }}>
+          In a remote interview, your video <em>is</em> your first impression. People decide how they feel about you within seconds, and they see
+          you through a webcam that wasn&apos;t built for good lighting. Research shows that how you&apos;re lit, where your camera sits, and how
+          your video looks all change how trustworthy and likable you seem, even when what you say is exactly the same.
+        </p>
+      </section>
 
-      <div style={{ display: "grid", gap: 16 }}>
-        {RESEARCH.map((s, i) => (
-          <StudyCard key={s.url} n={i + 1} s={s} />
-        ))}
-      </div>
+      {RESEARCH.map((s, i) => (
+        <StudyCard key={s.url} badge={`Study ${i + 1}`} s={s} />
+      ))}
 
-      <h2 style={{ marginTop: 32, marginBottom: 4 }}>Built to be fair across skin tones</h2>
-      <StudyCard s={FAIRNESS} />
+      <StudyCard badge="Fairness" s={FAIRNESS} />
 
-      <h2 style={{ marginTop: 32, marginBottom: 8 }}>How Light Coach scores your lighting</h2>
-      <div style={{ ...card, display: "grid", gap: 10 }}>
-        {FACTORS.map(([name, text]) => (
-          <div key={name}>
-            <strong>{name}</strong>
-            <div style={{ fontSize: 14, opacity: 0.85 }}>{text}</div>
-          </div>
-        ))}
-        <div style={{ fontSize: 14, opacity: 0.85 }}>
-          If any one of these is very bad, the total drops hard, so a dark face can&apos;t score well just because everything else is fine. The
-          virtual light then searches hundreds of light positions, strengths, and softness levels to find the one that gives you the highest
-          score, and the voice tells you how to get your real lighting closer to it.
+      <section className="glass" style={{ padding: "24px 28px" }}>
+        <h3 style={{ margin: "0 0 14px", fontSize: 22, fontWeight: 600 }}>How your score works</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+          {FACTORS.map(([icon, name, text]) => (
+            <div key={name} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <Bubble>{icon}</Bubble>
+              <div>
+                <div style={{ fontWeight: 600 }}>{name}</div>
+                <div style={{ fontSize: 14, color: "var(--ink-soft)", lineHeight: 1.45 }}>{text}</div>
+              </div>
+            </div>
+          ))}
         </div>
-      </div>
+        <p style={{ fontSize: 15, lineHeight: 1.6, margin: "18px 0 0" }}>
+          If any one of these is very poor, the total drops hard, so a dark face can&apos;t score well just because everything else is fine. The
+          virtual light then tries hundreds of positions, strengths, and softness levels to find your best look, and the voice coaches you to get
+          your real lighting closer to it.
+        </p>
+      </section>
 
-      <p style={{ fontSize: 13, opacity: 0.75, marginTop: 16, maxWidth: 820 }}>
+      <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--ink)", opacity: 0.8, margin: "0 8px", textAlign: "center" }}>
         <strong>What we don&apos;t claim:</strong> no study we found shows that lighting alone changes hiring decisions. These studies show that
-        lighting, camera angle, and video quality change how trustworthy and likable people seem, which is part of every first impression. The
-        virtual light is a 2D preview using a simple head model, not physically accurate relighting.
+        lighting, camera angle, and video quality change how trustworthy and likable people seem. The virtual light is a 2D preview, not
+        physically accurate relighting.
       </p>
     </div>
   );
 }
 
-function StudyCard({ s, n }: { s: Study; n?: number }) {
+function StudyCard({ s, badge }: { s: Study; badge: string }) {
   return (
-    <div style={card}>
-      <div style={{ fontSize: 13, opacity: 0.6 }}>{n ? `Study ${n}` : "Study"}</div>
-      <h3 style={{ margin: "2px 0 10px" }}>{s.title}</h3>
-      <Row label="What they did" text={s.did} />
-      <Row label="What they found" text={s.found} />
-      <Row label="What it means for you" text={s.meaning} />
-      <Row label="In Light Coach" text={s.inApp} />
-      <Row label="Limits" text={s.limits} muted />
-      <a href={s.url} target="_blank" rel="noreferrer" style={{ fontSize: 14, color: "#8a5a00" }}>
-        {s.cite}
-      </a>
+    <section className="glass" style={{ padding: "24px 28px" }}>
+      <span className="aero-badge">{badge}</span>
+      <h3 style={{ margin: "10px 0 6px", fontSize: 22, fontWeight: 600 }}>{s.title}</h3>
+      <p style={{ margin: "0 0 18px", fontSize: 16, lineHeight: 1.6 }}>{s.found}</p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 18 }}>
+        <Point icon="🔬" label="How they tested it" text={s.did} />
+        <Point icon="💬" label="What it means for you" text={s.meaning} />
+        <Point icon="✨" label="In Light Coach" text={s.inApp} />
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 10, marginTop: 18, fontSize: 13 }}>
+        <span style={{ color: "var(--ink-soft)", fontStyle: "italic", maxWidth: 620 }}>Keep in mind: {s.limits}</span>
+        <a href={s.url} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>
+          {s.cite} ↗
+        </a>
+      </div>
+    </section>
+  );
+}
+
+function Point({ icon, label, text }: { icon: string; label: string; text: string }) {
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <Bubble>{icon}</Bubble>
+      <div>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-soft)" }}>{text}</div>
+      </div>
     </div>
   );
 }
 
-function Row({ label, text, muted }: { label: string; text: string; muted?: boolean }) {
+// Small glossy bubble that holds an icon.
+function Bubble({ children }: { children: React.ReactNode }) {
   return (
-    <p style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.5, opacity: muted ? 0.7 : 1 }}>
-      <strong>{label}: </strong>
-      {text}
-    </p>
+    <div
+      style={{
+        width: 38,
+        height: 38,
+        flexShrink: 0,
+        borderRadius: "50%",
+        display: "grid",
+        placeItems: "center",
+        fontSize: 18,
+        background: "radial-gradient(circle at 32% 28%, #ffffff 0%, #d9f3ff 45%, #9fdcf7 100%)",
+        border: "1px solid rgba(255,255,255,0.9)",
+        boxShadow: "0 3px 8px rgba(0,90,150,0.2), inset 0 -3px 6px rgba(0,120,200,0.15)",
+      }}
+    >
+      {children}
+    </div>
   );
 }
-
-const card: React.CSSProperties = { background: "#fff", border: "1px solid #e4d9bd", borderRadius: 12, padding: 16 };
