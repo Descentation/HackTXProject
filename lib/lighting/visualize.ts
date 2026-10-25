@@ -111,6 +111,17 @@ export function drawDebugOverlay(
     ctx.stroke();
   }
 
+  // A light straight in front of you would sit on your face: draw it as a thin ring so the face stays visible.
+  if (e && ((lx - e.cx) / e.rx) ** 2 + ((ly - e.cy) / e.ry) ** 2 < 1.1) {
+    ctx.beginPath();
+    ctx.arc(lx, ly, 12, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${rgb},0.75)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (showLightRay) label(ctx, "virtual light (in front of you)", lx, e.cy + e.ry + 22, "#ffffff");
+    return;
+  }
+
   // Glowing light orb.
   const radius = 14 + light.intensity * 6;
   const glow = ctx.createRadialGradient(lx, ly, 0, lx, ly, radius * 2.8);

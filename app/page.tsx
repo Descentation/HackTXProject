@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { FaceDetector } from "@mediapipe/tasks-vision";
 import { measure, score, directions, smooth, type Box, type Metrics, type Scores, type Direction } from "../lib/lighting/analyze";
-import { COLORS, DEFAULT_LIGHT, realWorldAdvice, updateLightFromPointer } from "../lib/lighting/light";
+import { COLORS, DEFAULT_LIGHT, realWorldAdvice } from "../lib/lighting/light";
 import { relightFrame } from "../lib/lighting/relight";
 import { drawDebugOverlay } from "../lib/lighting/visualize";
+import { DEFAULT_AIM, aimToLight, findBestAim, lightToAim, scoreWithLight, type LightAim } from "../lib/lighting/optimize";
 import type { VirtualLight } from "../lib/lighting/type";
 
 const LOCAL_MODEL = "/mediapipe/blaze_face_short_range.tflite";
@@ -14,7 +15,7 @@ const REMOTE_MODEL =
 const CENTER_BOX: Box = { x: 0.35, y: 0.2, w: 0.3, h: 0.45 };
 const AW = 160; // analysis size: small is fast and plenty for lighting
 const AH = 120;
-const RW = 640; // virtual light render width
+const RW = 640; // display render width
 
 async function loadDetector(): Promise<FaceDetector | null> {
   try {
@@ -45,35 +46,52 @@ const LABELS: [keyof Scores, string][] = [
   ["framing", "Framing"],
 ];
 
+type Settings = {
+  autoLight: boolean; // the app picks the light position/strength for the best score
+  lightOn: boolean;
+  colorName: string;
+  showModel: boolean; // head model + light ray
+  manualIntensity: number;
+  manualDistance: number;
+  manualSoftness: number;
+};
+
+const DEFAULT_SETTINGS: Settings = {
+  autoLight: true,
+  lightOn: true,
+  colorName: "Warm",
+  showModel: true,
+  manualIntensity: DEFAULT_LIGHT.intensity,
+  manualDistance: DEFAULT_LIGHT.distance,
+  manualSoftness: DEFAULT_LIGHT.softness,
+};
+
 const scoreColor = (t: number | null) => (t === null ? "#999" : t >= 80 ? "#2e7d32" : t >= 50 ? "#c77700" : "#c62828");
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export default function Coach() {
+  const [tab, setTab] = useState<"coach" | "settings">("coach");
   const [running, setRunning] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);
   const [mode, setMode] = useState<"off" | "loading" | "face" | "center">("off");
   const [scores, setScores] = useState<Scores | null>(null);
+  const [virtualTotal, setVirtualTotal] = useState<number | null>(null);
   const [dirs, setDirs] = useState<Direction[]>([]);
   const [error, setError] = useState("");
-
-  // Virtual light studio
-  const [studio, setStudio] = useState(false);
-  const [light, setLight] = useState<VirtualLight>(DEFAULT_LIGHT);
-  const [colorName, setColorName] = useState("Warm");
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [lightView, setLightView] = useState<VirtualLight>(DEFAULT_LIGHT);
   const [showOriginal, setShowOriginal] = useState(false);
-  const [showModel, setShowModel] = useState(true);
-  const [relitTotal, setRelitTotal] = useState<number | null>(null);
   const [advice, setAdvice] = useState("");
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const overlayRef = useRef<HTMLCanvasElement>(null);
   const relitRef = useRef<HTMLCanvasElement>(null);
-  const studioOverlayRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const work = useRef<HTMLCanvasElement | null>(null);
   const full = useRef<HTMLCanvasElement | null>(null);
   const outImg = useRef<ImageData | null>(null);
   const detector = useRef<FaceDetector | null>(null);
   const ema = useRef<Metrics | null>(null);
-  const relitEma = useRef<Metrics | null>(null);
+  const virtualEma = useRef<number | null>(null);
   const faceRef = useRef<Box | null>(null);
   const voiceRef = useRef(true);
   const spoken = useRef({ text: "", time: 0 });
@@ -82,11 +100,12 @@ export default function Coach() {
   const active = useRef<{ key: string; factor?: Direction["factor"]; value: number; time: number } | null>(null);
   const lastFace = useRef<{ box: Box; time: number } | null>(null);
   const raf = useRef(0);
-  // Refs mirror state so the animation loop always sees the latest values.
-  const studioRef = useRef(false);
+  // Virtual light: where we want it (relative to the face) and where it is drawn right now.
+  const aimRef = useRef<LightAim>(DEFAULT_AIM);
+  const needFullSearch = useRef(true);
   const lightRef = useRef<VirtualLight>(DEFAULT_LIGHT);
+  const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const showOriginalRef = useRef(false);
-  const showModelRef = useRef(true);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -94,24 +113,25 @@ export default function Coach() {
     if (!voiceOn) window.speechSynthesis?.cancel();
   }, [voiceOn]);
   useEffect(() => {
-    studioRef.current = studio;
-    relitEma.current = null;
-    setRelitTotal(null);
-    setAdvice("");
-    window.speechSynthesis?.cancel();
-  }, [studio]);
-  useEffect(() => {
     showOriginalRef.current = showOriginal;
   }, [showOriginal]);
-  useEffect(() => {
-    showModelRef.current = showModel;
-  }, [showModel]);
 
   useEffect(() => () => stop(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function changeLight(next: VirtualLight) {
-    lightRef.current = next;
-    setLight(next);
+  function updateSettings(patch: Partial<Settings>) {
+    const next = { ...settingsRef.current, ...patch };
+    settingsRef.current = next;
+    setSettings(next);
+    if (patch.autoLight) needFullSearch.current = true;
+    if (patch.autoLight === false) {
+      // Switching to manual: keep the light where auto had it.
+      next.manualIntensity = aimRef.current.intensity;
+      next.manualDistance = aimRef.current.distance;
+      next.manualSoftness = aimRef.current.softness;
+      setSettings({ ...next });
+    }
+    if (!next.autoLight)
+      aimRef.current = { ...aimRef.current, intensity: next.manualIntensity, distance: next.manualDistance, softness: next.manualSoftness };
   }
 
   function say(text: string) {
@@ -145,6 +165,8 @@ export default function Coach() {
     work.current.width = AW;
     work.current.height = AH;
     ema.current = null;
+    virtualEma.current = null;
+    needFullSearch.current = true;
     loop();
   }
 
@@ -163,7 +185,7 @@ export default function Coach() {
     let last = 0;
     const tick = () => {
       const now = performance.now();
-      if (studioRef.current) render();
+      render();
       if (now - last > 150) {
         last = now;
         analyze(now);
@@ -171,6 +193,13 @@ export default function Coach() {
       raf.current = requestAnimationFrame(tick);
     };
     raf.current = requestAnimationFrame(tick);
+  }
+
+  // The light settings that don't come from the search (color, on/off).
+  function baseLight(): VirtualLight {
+    const st = settingsRef.current;
+    const color = COLORS.find((c) => c.name === st.colorName)?.color ?? DEFAULT_LIGHT.color;
+    return { ...lightRef.current, color, enabled: st.lightOn };
   }
 
   function analyze(now: number) {
@@ -199,9 +228,10 @@ export default function Coach() {
       if (face) lastFace.current = { box: face, time: now };
       else if (lastFace.current && now - lastFace.current.time < 1000) face = lastFace.current.box;
     }
+    if (!face) needFullSearch.current = true; // re-tune from scratch when you come back
     faceRef.current = face;
 
-    // 2. Measure the REAL lighting on a small copy of the camera frame.
+    // 2. Measure the REAL lighting (camera alone) on a small copy of the frame.
     const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
     ctx.drawImage(video, 0, 0, AW, AH);
     const px = ctx.getImageData(0, 0, AW, AH).data;
@@ -215,28 +245,36 @@ export default function Coach() {
     } else {
       d = directions({} as Metrics, {} as Scores, false, trackFace);
     }
-    setScores(s);
-    setDirs(d);
-    drawOverlay(face);
 
-    // 3. In the studio, also score the relit image (clearly labeled as virtual).
-    const relit = relitRef.current;
-    if (studioRef.current && face && relit && relit.width && !showOriginalRef.current) {
-      ctx.drawImage(relit, 0, 0, AW, AH);
-      const rpx = ctx.getImageData(0, 0, AW, AH).data;
-      relitEma.current = smooth(relitEma.current, measure(rpx, AW, AH, face));
-      setRelitTotal(score(relitEma.current, trackFace).total);
+    // 3. Auto light: search for the light that gives the best score, and keep re-tuning as you move.
+    const st = settingsRef.current;
+    if (face && st.lightOn) {
+      if (st.autoLight) {
+        const fullSearch = needFullSearch.current;
+        const r = findBestAim(px, AW, AH, face, aimRef.current, baseLight(), trackFace, fullSearch);
+        // Only move if it's clearly better, so the light doesn't wander back and forth.
+        if (fullSearch || r.total >= r.currentTotal + 2) aimRef.current = r.aim;
+        needFullSearch.current = false;
+      }
+      const shown = scoreWithLight(px, AW, AH, face, aimToLight(aimRef.current, face, baseLight()), trackFace);
+      virtualEma.current = virtualEma.current === null ? shown : lerp(virtualEma.current, shown, 0.4);
+      setVirtualTotal(Math.round(virtualEma.current));
+    } else {
+      virtualEma.current = null;
+      setVirtualTotal(s ? s.total : null);
     }
 
-    // Spoken coaching only in Coach mode, so it doesn't talk over the light demo.
-    if (!studioRef.current) maybeSpeak(d, s, now);
+    setScores(s);
+    setDirs(d);
+    setLightView(lightRef.current);
+    maybeSpeak(d, s, now);
   }
 
-  // Draw the relit frame and the light rig every animation frame.
+  // Draw the relit camera and the light rig every animation frame.
   function render() {
     const video = videoRef.current;
     const relit = relitRef.current;
-    const over = studioOverlayRef.current;
+    const over = overlayRef.current;
     if (!video || !relit || !over || video.readyState < 2 || !video.videoWidth) return;
 
     const W = RW;
@@ -249,6 +287,23 @@ export default function Coach() {
       outImg.current = null;
     }
 
+    // Glide the drawn light toward its target so it moves smoothly and follows your face.
+    const face = faceRef.current;
+    if (face) {
+      const goal = aimToLight(aimRef.current, face, baseLight());
+      const cur = lightRef.current;
+      lightRef.current = {
+        ...goal,
+        x: lerp(cur.x, goal.x, 0.15),
+        y: lerp(cur.y, goal.y, 0.15),
+        intensity: lerp(cur.intensity, goal.intensity, 0.15),
+        distance: lerp(cur.distance, goal.distance, 0.15),
+        softness: lerp(cur.softness, goal.softness, 0.15),
+      };
+    } else {
+      lightRef.current = baseLight();
+    }
+
     const fctx = f.getContext("2d", { willReadFrequently: true })!;
     fctx.drawImage(video, 0, 0, W, H);
     const frame = fctx.getImageData(0, 0, W, H);
@@ -257,17 +312,17 @@ export default function Coach() {
       rctx.putImageData(frame, 0, 0);
     } else {
       if (!outImg.current) outImg.current = rctx.createImageData(W, H);
-      relightFrame(frame.data, outImg.current.data, W, H, faceRef.current, lightRef.current);
+      relightFrame(frame.data, outImg.current.data, W, H, face, lightRef.current);
       rctx.putImageData(outImg.current, 0, 0);
     }
 
     const octx = over.getContext("2d")!;
     octx.clearRect(0, 0, W, H);
-    if (!showOriginalRef.current)
-      drawDebugOverlay(octx, W, H, faceRef.current, lightRef.current, showModelRef.current, showModelRef.current, ema.current);
+    const show = settingsRef.current.showModel;
+    if (!showOriginalRef.current) drawDebugOverlay(octx, W, H, face, lightRef.current, show, show, ema.current);
   }
 
-    // Speak one instruction at a time, then tell the user if what they're doing is helping.
+  // Speak one instruction at a time, then tell the user if what they're doing is helping.
   function maybeSpeak(d: Direction[], s: Scores | null, now: number) {
     const top = d[0];
     if (top.key !== candidate.current.key) candidate.current = { key: top.key, since: now };
@@ -300,67 +355,54 @@ export default function Coach() {
     spoken.current = { text, time: now };
   }
 
-  function drawOverlay(face: Box | null) {
-    const c = overlayRef.current;
-    const v = videoRef.current;
-    if (!c || !v) return;
-    c.width = v.clientWidth;
-    c.height = v.clientHeight;
-    const ctx = c.getContext("2d")!;
-    ctx.clearRect(0, 0, c.width, c.height);
-    if (!face) return;
-    ctx.strokeStyle = "#d9b44a";
-    ctx.lineWidth = 3;
-    ctx.setLineDash(detector.current ? [] : [8, 6]);
-    ctx.strokeRect(face.x * c.width, face.y * c.height, face.w * c.width, face.h * c.height);
-  }
-
-  // The view is mirrored, so flip X back to raw camera coordinates.
+  // Dragging the light switches to manual. The view is mirrored, so flip X back to raw camera coordinates.
   function moveLight(e: React.PointerEvent<HTMLCanvasElement>) {
+    const face = faceRef.current;
+    if (!face) return;
     const r = e.currentTarget.getBoundingClientRect();
-    const xRaw = 1 - (e.clientX - r.left) / r.width;
+    const x = 1 - (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
-    changeLight(updateLightFromPointer(lightRef.current, xRaw, y, 1, 1));
+    if (settingsRef.current.autoLight) updateSettings({ autoLight: false });
+    const st = settingsRef.current;
+    aimRef.current = lightToAim({ ...lightRef.current, x, y, intensity: st.manualIntensity, distance: st.manualDistance, softness: st.manualSoftness }, face);
     setAdvice("");
   }
 
   function explainForReal() {
-    const text = realWorldAdvice(lightRef.current, faceRef.current, colorName);
+    const text = realWorldAdvice(lightRef.current, faceRef.current, settingsRef.current.colorName);
     setAdvice(text);
     if (voiceRef.current) say(text);
     spoken.current = { text, time: performance.now() };
   }
 
-  const total = scores?.total ?? null;
+  const real = scores?.total ?? null;
+  const auto = settings.autoLight;
 
   return (
     <main style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
       <h1 style={{ marginBottom: 4 }}>Light Coach</h1>
       <p style={{ marginTop: 0, opacity: 0.8 }}>
-        A live lighting check before your video interview. Follow the spoken directions until the score turns green, or try a virtual light
-        to see what better lighting would look like.
+        A live lighting check before your video interview. A virtual light sets itself for the best possible score, and the voice tells you how to
+        improve your real lighting even more.
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button style={studio ? tabOff : tabOn} onClick={() => setStudio(false)}>
+        <button style={tab === "coach" ? tabOn : tabOff} onClick={() => setTab("coach")}>
           Coach
         </button>
-        <button style={studio ? tabOn : tabOff} onClick={() => setStudio(true)}>
-          Virtual light
+        <button style={tab === "settings" ? tabOn : tabOff} onClick={() => setTab("settings")}>
+          Settings
         </button>
       </div>
 
       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 480px", maxWidth: 640, alignSelf: "flex-start" }}>
-          {/* Mirrored like a selfie camera so directions feel natural. */}
+          {/* The raw camera sits underneath; the relit view is drawn on top. Mirrored like a selfie camera. */}
           <video ref={videoRef} playsInline muted style={{ width: "100%", borderRadius: 12, background: "#222", transform: "scaleX(-1)", display: "block" }} />
-          <canvas ref={overlayRef} style={{ ...layer, pointerEvents: "none" }} />
-
-          {/* Virtual light view sits on top of the camera. */}
-          <canvas ref={relitRef} style={{ ...layer, borderRadius: 12, pointerEvents: "none", visibility: studio ? "visible" : "hidden" }} />
+          <canvas ref={relitRef} style={{ ...layer, borderRadius: 12, pointerEvents: "none", visibility: running ? "visible" : "hidden" }} />
           <canvas
-            ref={studioOverlayRef}
-            style={{ ...layer, cursor: "crosshair", touchAction: "none", visibility: studio ? "visible" : "hidden", pointerEvents: studio ? "auto" : "none" }}
+            ref={overlayRef}
+            style={{ ...layer, cursor: "crosshair", touchAction: "none", pointerEvents: running ? "auto" : "none" }}
             onPointerDown={(e) => {
               dragging.current = true;
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -370,12 +412,11 @@ export default function Coach() {
             onPointerUp={() => (dragging.current = false)}
             onPointerCancel={() => (dragging.current = false)}
           />
-          {studio && running && (
+          {running && (
             <div style={{ position: "absolute", left: 10, bottom: 10, background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 12, padding: "4px 8px", borderRadius: 6, pointerEvents: "none" }}>
-              {showOriginal ? "Original camera" : "Drag anywhere to move the light"}
+              {showOriginal ? "Original camera" : !settings.lightOn ? "Virtual light off" : auto ? "Auto light: tuning for the best score" : "Manual light: drag to move it"}
             </div>
           )}
-
           {!running && (
             <button onClick={start} style={{ ...button, position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", fontSize: 18 }}>
               Start camera
@@ -384,74 +425,23 @@ export default function Coach() {
         </div>
 
         <div style={{ flex: "1 1 280px", ...card }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span id="score" data-score={total ?? ""} style={{ fontSize: 64, fontWeight: 700, color: scoreColor(total) }}>
-              {total ?? "--"}
-            </span>
-            <span style={{ opacity: 0.7 }}>/ 100 {studio ? "your real lighting" : "lighting score"}</span>
-          </div>
-
-          {studio ? (
+          {tab === "coach" ? (
             <>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: -4 }}>
-                <span id="relit-score" style={{ fontSize: 32, fontWeight: 700, color: scoreColor(relitTotal) }}>
-                  {relitTotal ?? "--"}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span id="score" data-score={virtualTotal ?? ""} style={{ fontSize: 64, fontWeight: 700, color: scoreColor(virtualTotal) }}>
+                  {virtualTotal ?? "--"}
                 </span>
-                <span style={{ opacity: 0.7 }}>/ 100 with the virtual light</span>
+                <span style={{ opacity: 0.7 }}>/ 100 {settings.lightOn ? "with virtual light" : "lighting score"}</span>
               </div>
+              {settings.lightOn && (
+                <div style={{ marginTop: -6, fontSize: 15 }}>
+                  Camera alone:{" "}
+                  <strong id="real-score" data-score={real ?? ""} style={{ color: scoreColor(real) }}>
+                    {real ?? "--"}
+                  </strong>
+                </div>
+              )}
 
-              <p style={{ fontSize: 15, marginBottom: 12 }}>
-                Drag the light around your face. Then ask how to get this look with a real lamp.
-              </p>
-
-              <Slider label="Intensity" value={light.intensity} min={0.3} max={2} step={0.05} onChange={(v) => changeLight({ ...light, intensity: v })} />
-              <Slider label="Softness" value={light.softness} min={0} max={1} step={0.05} onChange={(v) => changeLight({ ...light, softness: v })} />
-              <Slider label="Distance" value={light.distance} min={0} max={1} step={0.05} onChange={(v) => changeLight({ ...light, distance: v })} />
-
-              <div style={{ display: "flex", gap: 6, margin: "8px 0 12px" }}>
-                {COLORS.map((c) => (
-                  <button
-                    key={c.name}
-                    onClick={() => {
-                      setColorName(c.name);
-                      changeLight({ ...light, color: c.color });
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: "6px 0",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      background: c.css,
-                      border: colorName === c.name ? "2px solid #3b2f1d" : "1px solid #e4d9bd",
-                      fontSize: 12,
-                    }}
-                  >
-                    {c.name}
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button
-                  style={{ ...button, background: "#7a6a4f" }}
-                  onPointerDown={() => setShowOriginal(true)}
-                  onPointerUp={() => setShowOriginal(false)}
-                  onPointerLeave={() => setShowOriginal(false)}
-                >
-                  Hold to see original
-                </button>
-                <button style={{ ...button, background: "#7a6a4f" }} onClick={() => setShowModel((v) => !v)}>
-                  {showModel ? "Hide how it works" : "Show how it works"}
-                </button>
-              </div>
-
-              <button style={{ ...button, width: "100%", marginTop: 12 }} onClick={explainForReal}>
-                How do I get this for real?
-              </button>
-              {advice && <p style={{ fontSize: 15, fontWeight: 600 }}>{advice}</p>}
-            </>
-          ) : (
-            <>
               <p id="instruction" style={{ fontSize: 20, fontWeight: 600, minHeight: 56 }}>
                 {running ? dirs[0]?.text ?? "Looking..." : "Press Start camera."}
               </p>
@@ -464,6 +454,7 @@ export default function Coach() {
                 </ul>
               )}
 
+              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Your real setup</div>
               {LABELS.map(([k, label]) => (
                 <div key={k} style={{ marginBottom: 8 }}>
                   <div style={{ fontSize: 13 }}>{label}</div>
@@ -480,6 +471,96 @@ export default function Coach() {
                   </div>
                 </div>
               ))}
+
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                <button
+                  style={{ ...button, background: "#7a6a4f" }}
+                  onPointerDown={() => setShowOriginal(true)}
+                  onPointerUp={() => setShowOriginal(false)}
+                  onPointerLeave={() => setShowOriginal(false)}
+                >
+                  Hold to see original
+                </button>
+                <button style={button} onClick={explainForReal} disabled={!running}>
+                  How do I get this for real?
+                </button>
+              </div>
+              {advice && <p style={{ fontSize: 15, fontWeight: 600 }}>{advice}</p>}
+            </>
+          ) : (
+            <>
+              <h3 style={{ marginTop: 0 }}>Settings</h3>
+
+              <Toggle label="Virtual light" on={settings.lightOn} onChange={(v) => updateSettings({ lightOn: v })} />
+              <Toggle label="Auto light (best score)" on={auto} onChange={(v) => updateSettings({ autoLight: v })} />
+              <Toggle label="Show how it works (head model, light ray)" on={settings.showModel} onChange={(v) => updateSettings({ showModel: v })} />
+              <Toggle label="Voice directions" on={voiceOn} onChange={setVoiceOn} />
+
+              <p style={{ fontSize: 12, opacity: 0.7, margin: "4px 0 8px" }}>
+                {auto
+                  ? "Auto light is choosing the position, intensity, distance, and softness. Turn it off or drag the light to adjust them yourself."
+                  : "Manual: drag the light on the video, and use the sliders."}
+              </p>
+
+              <Slider
+                label="Intensity"
+                value={auto ? lightView.intensity : settings.manualIntensity}
+                min={0}
+                max={2}
+                step={0.05}
+                disabled={auto}
+                onChange={(v) => updateSettings({ manualIntensity: v })}
+              />
+              <Slider
+                label="Distance"
+                value={auto ? lightView.distance : settings.manualDistance}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={auto}
+                onChange={(v) => updateSettings({ manualDistance: v })}
+              />
+              <Slider
+                label="Softness"
+                value={auto ? lightView.softness : settings.manualSoftness}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={auto}
+                onChange={(v) => updateSettings({ manualSoftness: v })}
+              />
+
+              <div style={{ fontSize: 13, margin: "4px 0" }}>Light color</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                {COLORS.map((c) => (
+                  <button
+                    key={c.name}
+                    onClick={() => updateSettings({ colorName: c.name })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 0",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      background: c.css,
+                      border: settings.colorName === c.name ? "2px solid #3b2f1d" : "1px solid #e4d9bd",
+                      fontSize: 12,
+                    }}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                style={{ ...button, background: "#7a6a4f" }}
+                onClick={() => {
+                  aimRef.current = DEFAULT_AIM;
+                  updateSettings({ ...DEFAULT_SETTINGS });
+                  setVoiceOn(true);
+                }}
+              >
+                Reset to defaults
+              </button>
             </>
           )}
 
@@ -497,7 +578,7 @@ export default function Coach() {
           <p style={{ fontSize: 12, opacity: 0.7 }}>
             {mode === "loading" && "Loading face tracking..."}
             {mode === "face" && "Face tracking on."}
-            {mode === "center" && "Face tracking unavailable, so I'm checking the center of the frame (dashed box). Framing tips are off."}
+            {mode === "center" && "Face tracking unavailable, so I'm checking the center of the frame. Framing tips are off."}
           </p>
           {error && <p style={{ color: "#c62828" }}>{error}</p>}
         </div>
@@ -505,20 +586,49 @@ export default function Coach() {
 
       <p style={{ fontSize: 12, opacity: 0.7, marginTop: 16 }}>
         Video stays on your computer and is never uploaded. The score measures relative light in the camera image, so treat it as a guide. The
-        virtual light is a 2D preview using a simple head model, not a physically accurate relight.
+        virtual light is a 2D preview using a simple head model, not a physically accurate relight. The voice directions are about your real
+        lighting.
       </p>
     </main>
   );
 }
 
-function Slider({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void }) {
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+}) {
   return (
-    <label style={{ display: "block", marginBottom: 8, fontSize: 13 }}>
+    <label style={{ display: "block", marginBottom: 8, fontSize: 13, opacity: disabled ? 0.6 : 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span>{label}</span>
+        <span>
+          {label}
+          {disabled ? " (auto)" : ""}
+        </span>
         <span style={{ opacity: 0.6 }}>{value.toFixed(2)}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)} style={{ width: "100%", accentColor: "#3b2f1d" }} />
+      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(+e.target.value)} style={{ width: "100%", accentColor: "#3b2f1d" }} />
+    </label>
+  );
+}
+
+function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, marginBottom: 8, cursor: "pointer" }}>
+      <span>{label}</span>
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} style={{ width: 18, height: 18, accentColor: "#3b2f1d" }} />
     </label>
   );
 }
