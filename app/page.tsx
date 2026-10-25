@@ -8,6 +8,7 @@ import { relightFrame } from "../lib/lighting/relight";
 import { drawDebugOverlay } from "../lib/lighting/visualize";
 import { DEFAULT_AIM, aimToLight, findBestAim, lightToAim, scoreWithLight, type LightAim } from "../lib/lighting/optimize";
 import type { VirtualLight } from "../lib/lighting/type";
+import { RESEARCH } from "../lib/lighting/research";
 
 const LOCAL_MODEL = "/mediapipe/blaze_face_short_range.tflite";
 const REMOTE_MODEL =
@@ -454,6 +455,28 @@ export default function Coach() {
                 </ul>
               )}
 
+                    <section style={{ marginTop: 32 }}>
+        <h2 style={{ marginBottom: 4 }}>Why this matters</h2>
+        <p style={{ marginTop: 0, opacity: 0.8 }}>Your video is the first impression in a remote interview. Here's the research behind what Light Coach checks.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+          {RESEARCH.map((r) => (
+            <div key={r.url} style={card}>
+              <strong style={{ fontSize: 16 }}>{r.title}</strong>
+              <p style={{ fontSize: 14, marginBottom: 8 }}>{r.finding}</p>
+              <p style={{ fontSize: 13, opacity: 0.8, marginTop: 0 }}>
+                <em>In the app:</em> {r.inApp}
+              </p>
+              <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "#8a5a00" }}>
+                {r.cite}
+              </a>
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize: 12, opacity: 0.7 }}>
+          No study we found shows that lighting alone changes hiring decisions. These studies show that lighting, camera angle, and video quality
+          change how trustworthy and likable people seem.
+        </p>
+      </section>
               <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Your real setup</div>
               {LABELS.map(([k, label]) => (
                 <div key={k} style={{ marginBottom: 8 }}>
