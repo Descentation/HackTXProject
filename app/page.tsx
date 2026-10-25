@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { FaceDetector } from "@mediapipe/tasks-vision";
 import { measure, score, directions, smooth, type Box, type Metrics, type Scores, type Direction } from "../lib/lighting/analyze";
-import { COLORS, DEFAULT_LIGHT, realWorldAdvice } from "../lib/lighting/light";
+import { COLORS, DEFAULT_LIGHT } from "../lib/lighting/light";
 import { relightFrame } from "../lib/lighting/relight";
 import { drawDebugOverlay } from "../lib/lighting/visualize";
 import { DEFAULT_AIM, aimToLight, findBestAim, lightToAim, scoreWithLight, type LightAim } from "../lib/lighting/optimize";
 import type { VirtualLight } from "../lib/lighting/type";
-import { RESEARCH } from "../lib/lighting/research";
+import { englishVoices, phrase, pickVoice } from "../lib/voice";
+import WhyTab from "./why-tab";
 
 const LOCAL_MODEL = "/mediapipe/blaze_face_short_range.tflite";
 const REMOTE_MODEL =
@@ -71,7 +72,7 @@ const scoreColor = (t: number | null) => (t === null ? "#999" : t >= 80 ? "#2e7d
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export default function Coach() {
-  const [tab, setTab] = useState<"coach" | "settings">("coach");
+  const [tab, setTab] = useState<"coach" | "settings" | "why">("coach");
   const [running, setRunning] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);
   const [mode, setMode] = useState<"off" | "loading" | "face" | "center">("off");
@@ -81,8 +82,9 @@ export default function Coach() {
   const [error, setError] = useState("");
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [lightView, setLightView] = useState<VirtualLight>(DEFAULT_LIGHT);
-  const [showOriginal, setShowOriginal] = useState(false);
-  const [advice, setAdvice] = useState("");
+  const [voiceName, setVoiceName] = useState(""); // "" = pick the most natural voice automatically
+  const [voiceRate, setVoiceRate] = useState(1);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const relitRef = useRef<HTMLCanvasElement>(null);
@@ -106,7 +108,8 @@ export default function Coach() {
   const needFullSearch = useRef(true);
   const lightRef = useRef<VirtualLight>(DEFAULT_LIGHT);
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
-  const showOriginalRef = useRef(false);
+  const voiceNameRef = useRef("");
+  const voiceRateRef = useRef(1);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -114,8 +117,18 @@ export default function Coach() {
     if (!voiceOn) window.speechSynthesis?.cancel();
   }, [voiceOn]);
   useEffect(() => {
-    showOriginalRef.current = showOriginal;
-  }, [showOriginal]);
+    voiceNameRef.current = voiceName;
+    voiceRateRef.current = voiceRate;
+  }, [voiceName, voiceRate]);
+  // Voices load in the background, so refresh the list when they arrive.
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    const load = () => setVoices(englishVoices());
+    load();
+    synth.addEventListener?.("voiceschanged", load);
+    return () => synth.removeEventListener?.("voiceschanged", load);
+  }, []);
 
   useEffect(() => () => stop(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -140,14 +153,20 @@ export default function Coach() {
     if (!synth) return;
     synth.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.05;
+    const v = pickVoice(voiceNameRef.current);
+    if (v) {
+      u.voice = v;
+      u.lang = v.lang;
+    }
+    u.rate = voiceRateRef.current;
+    u.pitch = 1.05;
     synth.speak(u);
   }
 
   async function start() {
     setError("");
     // Speaking inside the click lets browsers allow audio later.
-    if (voiceRef.current) say("Lighting coach started.");
+    if (voiceRef.current) say(phrase.start());
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
       const video = videoRef.current!;
@@ -309,18 +328,14 @@ export default function Coach() {
     fctx.drawImage(video, 0, 0, W, H);
     const frame = fctx.getImageData(0, 0, W, H);
     const rctx = relit.getContext("2d")!;
-    if (showOriginalRef.current) {
-      rctx.putImageData(frame, 0, 0);
-    } else {
-      if (!outImg.current) outImg.current = rctx.createImageData(W, H);
-      relightFrame(frame.data, outImg.current.data, W, H, face, lightRef.current);
-      rctx.putImageData(outImg.current, 0, 0);
-    }
+    if (!outImg.current) outImg.current = rctx.createImageData(W, H);
+    relightFrame(frame.data, outImg.current.data, W, H, face, lightRef.current);
+    rctx.putImageData(outImg.current, 0, 0);
 
     const octx = over.getContext("2d")!;
     octx.clearRect(0, 0, W, H);
     const show = settingsRef.current.showModel;
-    if (!showOriginalRef.current) drawDebugOverlay(octx, W, H, face, lightRef.current, show, show, ema.current);
+    drawDebugOverlay(octx, W, H, face, lightRef.current, show, show, ema.current);
   }
 
   // Speak one instruction at a time, then tell the user if what they're doing is helping.
@@ -336,8 +351,8 @@ export default function Coach() {
     if (a && a.key === top.key) {
       if (top.factor && now - a.time > 4000) {
         const delta = cur - a.value;
-        if (delta > 0.12) return speakNow("Better. Keep going.", top, cur, now);
-        if (delta < -0.12) return speakNow("That made it worse. Go back the other way.", top, cur, now);
+        if (delta > 0.12) return speakNow(phrase.better(), top, cur, now);
+        if (delta < -0.12) return speakNow(phrase.worse(), top, cur, now);
       }
       if (top.key !== "good" && now - a.time > 12000) speakNow(top.text, top, cur, now);
       return;
@@ -347,7 +362,7 @@ export default function Coach() {
     if (now - candidate.current.since < 1200) return;
     if (a && now - a.time < 2500) return;
     const fixed = a && a.key !== "noface" && !d.some((x) => x.key === a.key);
-    speakNow(fixed && top.key !== "good" ? `That's fixed. ${top.text}` : top.text, top, cur, now);
+    speakNow(fixed && top.key !== "good" ? `${phrase.fixed()} ${top.text}` : top.text, top, cur, now);
   }
 
   function speakNow(text: string, top: Direction, value: number, now: number) {
@@ -366,14 +381,6 @@ export default function Coach() {
     if (settingsRef.current.autoLight) updateSettings({ autoLight: false });
     const st = settingsRef.current;
     aimRef.current = lightToAim({ ...lightRef.current, x, y, intensity: st.manualIntensity, distance: st.manualDistance, softness: st.manualSoftness }, face);
-    setAdvice("");
-  }
-
-  function explainForReal() {
-    const text = realWorldAdvice(lightRef.current, faceRef.current, settingsRef.current.colorName);
-    setAdvice(text);
-    if (voiceRef.current) say(text);
-    spoken.current = { text, time: performance.now() };
   }
 
   const real = scores?.total ?? null;
@@ -394,9 +401,15 @@ export default function Coach() {
         <button style={tab === "settings" ? tabOn : tabOff} onClick={() => setTab("settings")}>
           Settings
         </button>
+        <button style={tab === "why" ? tabOn : tabOff} onClick={() => setTab("why")}>
+          Why it matters
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+      {tab === "why" && <WhyTab />}
+
+      {/* Hidden (not removed) on the Why tab, so the camera keeps running. */}
+      <div style={{ display: tab === "why" ? "none" : "flex", gap: 24, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: "1 1 480px", maxWidth: 640, alignSelf: "flex-start" }}>
           {/* The raw camera sits underneath; the relit view is drawn on top. Mirrored like a selfie camera. */}
           <video ref={videoRef} playsInline muted style={{ width: "100%", borderRadius: 12, background: "#222", transform: "scaleX(-1)", display: "block" }} />
@@ -415,7 +428,7 @@ export default function Coach() {
           />
           {running && (
             <div style={{ position: "absolute", left: 10, bottom: 10, background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 12, padding: "4px 8px", borderRadius: 6, pointerEvents: "none" }}>
-              {showOriginal ? "Original camera" : !settings.lightOn ? "Virtual light off" : auto ? "Auto light: tuning for the best score" : "Manual light: drag to move it"}
+              {!settings.lightOn ? "Virtual light off" : auto ? "Auto light: tuning for the best score" : "Manual light: drag to move it"}
             </div>
           )}
           {!running && (
@@ -455,28 +468,6 @@ export default function Coach() {
                 </ul>
               )}
 
-                    <section style={{ marginTop: 32 }}>
-        <h2 style={{ marginBottom: 4 }}>Why this matters</h2>
-        <p style={{ marginTop: 0, opacity: 0.8 }}>Your video is the first impression in a remote interview. Here's the research behind what Light Coach checks.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-          {RESEARCH.map((r) => (
-            <div key={r.url} style={card}>
-              <strong style={{ fontSize: 16 }}>{r.title}</strong>
-              <p style={{ fontSize: 14, marginBottom: 8 }}>{r.finding}</p>
-              <p style={{ fontSize: 13, opacity: 0.8, marginTop: 0 }}>
-                <em>In the app:</em> {r.inApp}
-              </p>
-              <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "#8a5a00" }}>
-                {r.cite}
-              </a>
-            </div>
-          ))}
-        </div>
-        <p style={{ fontSize: 12, opacity: 0.7 }}>
-          No study we found shows that lighting alone changes hiring decisions. These studies show that lighting, camera angle, and video quality
-          change how trustworthy and likable people seem.
-        </p>
-      </section>
               <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Your real setup</div>
               {LABELS.map(([k, label]) => (
                 <div key={k} style={{ marginBottom: 8 }}>
@@ -494,21 +485,6 @@ export default function Coach() {
                   </div>
                 </div>
               ))}
-
-              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-                <button
-                  style={{ ...button, background: "#7a6a4f" }}
-                  onPointerDown={() => setShowOriginal(true)}
-                  onPointerUp={() => setShowOriginal(false)}
-                  onPointerLeave={() => setShowOriginal(false)}
-                >
-                  Hold to see original
-                </button>
-                <button style={button} onClick={explainForReal} disabled={!running}>
-                  How do I get this for real?
-                </button>
-              </div>
-              {advice && <p style={{ fontSize: 15, fontWeight: 600 }}>{advice}</p>}
             </>
           ) : (
             <>
@@ -518,6 +494,33 @@ export default function Coach() {
               <Toggle label="Auto light (best score)" on={auto} onChange={(v) => updateSettings({ autoLight: v })} />
               <Toggle label="Show how it works (head model, light ray)" on={settings.showModel} onChange={(v) => updateSettings({ showModel: v })} />
               <Toggle label="Voice directions" on={voiceOn} onChange={setVoiceOn} />
+
+              <label style={{ display: "block", fontSize: 13, marginBottom: 8 }}>
+                Voice
+                <select
+                  value={voiceName}
+                  onChange={(e) => setVoiceName(e.target.value)}
+                  style={{ display: "block", width: "100%", marginTop: 4, padding: 6, borderRadius: 6, border: "1px solid #c9b88f" }}
+                >
+                  <option value="">Auto (most natural: {pickVoice("")?.name ?? "default"})</option>
+                  {voices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Slider label="Voice speed" value={voiceRate} min={0.7} max={1.4} step={0.05} onChange={setVoiceRate} />
+              <button
+                style={{ ...button, background: "#7a6a4f", marginBottom: 12 }}
+                onClick={() => {
+                  voiceNameRef.current = voiceName;
+                  voiceRateRef.current = voiceRate;
+                  say("Hi! This is how I'll sound while I help with your lighting.");
+                }}
+              >
+                Test voice
+              </button>
 
               <p style={{ fontSize: 12, opacity: 0.7, margin: "4px 0 8px" }}>
                 {auto
@@ -580,6 +583,8 @@ export default function Coach() {
                   aimRef.current = DEFAULT_AIM;
                   updateSettings({ ...DEFAULT_SETTINGS });
                   setVoiceOn(true);
+                  setVoiceName("");
+                  setVoiceRate(1);
                 }}
               >
                 Reset to defaults
